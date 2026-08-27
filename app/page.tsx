@@ -78,31 +78,40 @@ export default function Home() {
 
   useEffect(() => { loadData(); }, []);
 
+  // FUNGSI MEMBUAT RUN BARU DENGAN SINKRONISASI SUPABASE AMAN
   async function createTestRun() {
     if (!supabase) return;
     const runName = `Run v1.${runs.length + 1} - ${new Date().toLocaleDateString()}`;
-    const { data: newRun, error } = await supabase.from("test_runs").insert({ name: runName, environment: "Staging" }).select().single();
+    const { data: newRun, error } = await supabase
+      .from("test_runs")
+      .insert({ name: runName, environment: "Android", status: "In Progress" })
+      .select()
+      .single();
     
     if (error) {
-      alert("Gagal membuat Test Run.");
+      console.error("Create run error:", error);
+      alert("Gagal membuat Test Run: " + error.message);
       return;
     }
 
     if (newRun) {
       const initialResults = cases.map(c => ({
         run_id: newRun.id,
-        case_id: c.id,
         case_key: c.case_key,
         title: c.title,
         status: "UNTESTED"
       }));
-      await supabase.from("test_results").insert(initialResults);
+
+      const { error: resError } = await supabase.from("test_results").insert(initialResults);
+      if (resError) {
+        console.error("Error inserting initial results:", resError);
+      }
+
       setRuns(prev => [newRun as TestRun, ...prev]);
       openRunDetails(newRun as TestRun);
     }
   }
 
-  // FUNGSI MEMBUKA DETAIL RUN & SYNC DARI SUPABASE
   async function openRunDetails(run: TestRun) {
     setActiveRun(run);
     if (!supabase) return;
@@ -111,19 +120,16 @@ export default function Home() {
     if (data) setRunResults(data as TestResult[]);
   }
 
-  // FUNGSI UPDATE & PERSISTENCE SUPABASE
+  // FUNGSI UPDATE STATUS REALTIME
   async function toggleResultStatus(id: string, currentStatus: string, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
     const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
 
-    // Update state lokal secara instan
     setRunResults(prev => prev.map(r => r.id === id ? { ...r, status: newStatus as any } : r));
 
-    // Simpan perubahan ke Supabase
     if (supabase) {
       const { error } = await supabase.from("test_results").update({ status: newStatus }).eq("id", id);
       if (error) {
         alert("Gagal menyimpan ke Supabase: " + error.message);
-        // Kembalikan ke status semula jika gagal
         setRunResults(prev => prev.map(r => r.id === id ? { ...r, status: currentStatus as any } : r));
       }
     }
@@ -226,8 +232,8 @@ export default function Home() {
                 {runs.map(r => (
                   <tr key={r.id}>
                     <td><b>{r.name}</b></td>
-                    <td>{r.environment}</td>
-                    <td><span className="badge">{r.status}</span></td>
+                    <td>{r.environment || "Android"}</td>
+                    <td><span className="badge">{r.status || "In Progress"}</span></td>
                     <td><button className="btn secondary" onClick={() => openRunDetails(r)}>Execute / View</button></td>
                   </tr>
                 ))}
@@ -239,7 +245,7 @@ export default function Home() {
 
         {tab === "Test Runs" && activeRun && (
           <div className="card">
-            <button className="btn secondary" style={{ marginBottom: 16 }} onClick={() => setActiveRun(null)}>← Back to All Runs</button>
+            <button className="btn secondary" style={{ marginBottom: 16 }} onClick={() => { setActiveRun(null); loadData(); }}>← Back to All Runs</button>
             <h2>{activeRun.name}</h2>
             <p className="muted" style={{ marginBottom: 16 }}>Click a button to change status. Click again to UN-SELECT (undo).</p>
 
@@ -247,7 +253,7 @@ export default function Home() {
               <thead><tr><th>Case ID</th><th>Title</th><th>Execution Status</th></tr></thead>
               <tbody>
                 {runResults.map((res, index) => {
-                  const matchedCase = cases.find(c => c.id === (res as any).case_id || c.case_key === res.case_key) || cases[index];
+                  const matchedCase = cases.find(c => (c as any).id === (res as any).case_id || c.case_key === res.case_key) || cases[index];
                   const caseKey = res.case_key || matchedCase?.case_key || `TC-00${index + 1}`;
                   const caseTitle = res.title || matchedCase?.title || "Test Case Execution";
 
