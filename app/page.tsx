@@ -56,6 +56,7 @@ export default function Home() {
   const [activeRun, setActiveRun] = useState<TestRun | null>(null);
   const [runResults, setRunResults] = useState<TestResult[]>([]);
   const [allResultsMap, setAllResultsMap] = useState<Record<string, TestResult[]>>({});
+  const [allResultsList, setAllResultsList] = useState<TestResult[]>([]);
 
   const [showRunModal, setShowRunModal] = useState(false);
   const [runNameInput, setRunNameInput] = useState("");
@@ -79,6 +80,7 @@ export default function Home() {
 
       const { data: resultsData } = await supabase.from("test_results").select("*");
       if (resultsData) {
+        setAllResultsList(resultsData as TestResult[]);
         const map: Record<string, TestResult[]> = {};
         resultsData.forEach((res: any) => {
           if (!map[res.run_id]) map[res.run_id] = [];
@@ -124,6 +126,7 @@ export default function Home() {
       setRuns(prev => [mockRun, ...prev]);
       setRunResults(initialResults);
       setAllResultsMap(prev => ({ ...prev, [mockRun.id]: initialResults }));
+      setAllResultsList(prev => [...prev, ...initialResults]);
       setActiveRun(mockRun);
       setShowRunModal(false);
       return;
@@ -164,6 +167,7 @@ export default function Home() {
 
       setRunResults(finalResults);
       setAllResultsMap(prev => ({ ...prev, [newRun.id]: finalResults }));
+      setAllResultsList(prev => [...prev, ...finalResults]);
       setActiveRun(newRun as TestRun);
       setShowRunModal(false);
     }
@@ -187,9 +191,7 @@ export default function Home() {
     if (!supabase) return;
 
     const { data, error } = await supabase.from("test_results").select("*").eq("run_id", run.id);
-    if (error) {
-      console.error("Fetch run details error:", error);
-    }
+    if (error) console.error("Fetch run details error:", error);
 
     if (data && data.length > 0) {
       setRunResults(data as TestResult[]);
@@ -276,6 +278,20 @@ export default function Home() {
     sanity: cases.filter(c => c.test_type === "Sanity").length
   };
 
+  // KALKULASI METRIK UNTUK TAB REPORTS
+  const reportMetrics = useMemo(() => {
+    const totalExecuted = allResultsList.length;
+    const passCount = allResultsList.filter(r => r.status === "PASS").length;
+    const failCount = allResultsList.filter(r => r.status === "FAIL").length;
+    const blockedCount = allResultsList.filter(r => r.status === "BLOCKED").length;
+    const naCount = allResultsList.filter(r => r.status === "N/A").length;
+    const untestedCount = allResultsList.filter(r => r.status === "UNTESTED").length;
+
+    const overallPassRate = totalExecuted > 0 ? Math.round((passCount / totalExecuted) * 100) : 0;
+
+    return { totalExecuted, passCount, failCount, blockedCount, naCount, untestedCount, overallPassRate };
+  }, [allResultsList]);
+
   async function saveCase() {
     const project = supabase ? await supabase.from("projects").select("id").eq("key", "GNG").single() : null;
     const steps = newCase.steps.split("\n").map(x => x.trim()).filter(Boolean).map(action => ({ action }));
@@ -321,8 +337,10 @@ export default function Home() {
           {tab === "Test Runs" && !activeRun && <button className="btn" onClick={openCreateRunModal}>+ Start New Test Run</button>}
         </div>
 
+        {/* TAB 1: DASHBOARD */}
         {tab === "Dashboard" && <Dashboard cases={cases} counts={counts} runsCount={runs.length} />}
 
+        {/* TAB 2: TEST CASES */}
         {tab === "Test Cases" && (
           <>
             <div className="toolbar">
@@ -414,16 +432,66 @@ export default function Home() {
           </div>
         )}
 
+        {/* TAB 4: DEFECTS */}
         {tab === "Defects" && <Placeholder text="V1 reserves bug_id on test results. Connects directly with Jira or external trackers." title="Defects"/>}
 
+        {/* TAB 5: REPORTS (MODUL ANALITIK TERUJI) */}
         {tab === "Reports" && (
-          <div className="card">
-            <h2>Execution Reports</h2>
-            <div className="grid" style={{ marginTop: 16 }}>
-              <Metric title="Total Runs Executed" value={runs.length} />
-              <Metric title="Repository Coverage" value={`${cases.length} Cases`} />
+          <>
+            {/* Executive Stat Cards */}
+            <div className="grid">
+              <Metric title="Total Test Executions" value={reportMetrics.totalExecuted} subtitle={`Across ${runs.length} Test Runs`} />
+              <Metric title="Overall Pass Rate" value={`${reportMetrics.overallPassRate}%`} subtitle={`${reportMetrics.passCount} Passed`} color="#22c55e" />
+              <Metric title="Failed Executions" value={reportMetrics.failCount} subtitle="Requires Investigation" color="#ef4444" />
+              <Metric title="Blocked / N/A" value={reportMetrics.blockedCount + reportMetrics.naCount} subtitle={`${reportMetrics.blockedCount} Blocked • ${reportMetrics.naCount} N/A`} color="#eab308" />
             </div>
-          </div>
+
+            {/* Execution Status Bar */}
+            <div className="card" style={{ marginTop: 20 }}>
+              <h3>Global Execution Breakdown</h3>
+              <p className="muted">Status summary across all test cases executed in all test runs</p>
+              
+              <div style={{ display: "flex", height: 16, borderRadius: 8, overflow: "hidden", marginTop: 14, background: "#334155" }}>
+                <div style={{ width: `${reportMetrics.totalExecuted ? (reportMetrics.passCount / reportMetrics.totalExecuted) * 100 : 0}%`, background: "#22c55e" }} title="Pass" />
+                <div style={{ width: `${reportMetrics.totalExecuted ? (reportMetrics.failCount / reportMetrics.totalExecuted) * 100 : 0}%`, background: "#ef4444" }} title="Fail" />
+                <div style={{ width: `${reportMetrics.totalExecuted ? (reportMetrics.blockedCount / reportMetrics.totalExecuted) * 100 : 0}%`, background: "#eab308" }} title="Blocked" />
+                <div style={{ width: `${reportMetrics.totalExecuted ? (reportMetrics.naCount / reportMetrics.totalExecuted) * 100 : 0}%`, background: "#64748b" }} title="N/A" />
+              </div>
+
+              <div style={{ display: "flex", gap: 20, marginTop: 14, fontSize: 13, flexWrap: "wrap" }}>
+                <span style={{ color: "#22c55e", fontWeight: "bold" }}>● {reportMetrics.passCount} Passed</span>
+                <span style={{ color: "#ef4444", fontWeight: "bold" }}>● {reportMetrics.failCount} Failed</span>
+                <span style={{ color: "#eab308", fontWeight: "bold" }}>● {reportMetrics.blockedCount} Blocked</span>
+                <span style={{ color: "#64748b", fontWeight: "bold" }}>● {reportMetrics.naCount} N/A</span>
+                <span style={{ color: "#94a3b8" }}>● {reportMetrics.untestedCount} Untested</span>
+              </div>
+            </div>
+
+            {/* Run-by-Run Execution Table */}
+            <div className="section card" style={{ marginTop: 20 }}>
+              <h3>Test Run Analytics</h3>
+              <table className="table" style={{ marginTop: 12 }}>
+                <thead><tr><th>Run Name</th><th>Environment</th><th>Status Breakdown</th><th>Action</th></tr></thead>
+                <tbody>
+                  {runs.map(r => (
+                    <tr key={r.id}>
+                      <td><b>{r.name}</b></td>
+                      <td>{r.environment || "Android"}</td>
+                      <td>{renderRunStatusSummary(r.id)}</td>
+                      <td>
+                        <button className="btn secondary" onClick={() => { setTab("Test Runs"); openRunDetails(r); }}>
+                          View Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {runs.length === 0 && (
+                    <tr><td colSpan={4} className="muted" style={{ textAlign: "center" }}>No test runs recorded yet. Execute a run to see reports!</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </main>
 
@@ -540,11 +608,12 @@ function Dashboard({ counts, cases, runsCount }: { counts: { total: number; smok
   );
 }
 
-function Metric({ title, value }: { title: string; value: number | string }) {
+function Metric({ title, value, subtitle, color }: { title: string; value: number | string; subtitle?: string; color?: string }) {
   return (
     <div className="card">
       <div className="muted">{title}</div>
-      <div className="metric">{value}</div>
+      <div className="metric" style={{ color: color || "inherit" }}>{value}</div>
+      {subtitle && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{subtitle}</div>}
     </div>
   );
 }
