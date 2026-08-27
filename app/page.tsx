@@ -50,10 +50,15 @@ export default function Home() {
     case_key: "", title: "", test_type: "Sanity", module: "General", priority: "Medium", precondition: "", expected_result: "", steps: "", tags: ""
   });
 
+  // State Test Runs & Selection Modal
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [activeRun, setActiveRun] = useState<TestRun | null>(null);
   const [runResults, setRunResults] = useState<TestResult[]>([]);
   const [allResultsMap, setAllResultsMap] = useState<Record<string, TestResult[]>>({});
+
+  const [showRunModal, setShowRunModal] = useState(false);
+  const [runNameInput, setRunNameInput] = useState("");
+  const [selectedCaseKeys, setSelectedCaseKeys] = useState<string[]>([]);
 
   async function loadData() {
     setLoading(true);
@@ -89,23 +94,35 @@ export default function Home() {
 
   useEffect(() => { loadData(); }, []);
 
-  // FUNGSI BUAT RUN BARU (DENGAN GUARANTEE BARIS POPULATED)
-  async function createTestRun() {
-    if (!supabase) return;
+  // OPEN MODAL BUAT RUN BARU
+  function openCreateRunModal() {
     const targetCases = cases.length > 0 ? cases : demoCases;
-    const runName = `Run v1.${runs.length + 1} - ${new Date().toLocaleDateString()}`;
-    
+    setRunNameInput(`Run v1.${runs.length + 1} - ${new Date().toLocaleDateString()}`);
+    setSelectedCaseKeys(targetCases.map(c => c.case_key)); // Default: Select All
+    setShowRunModal(true);
+  }
+
+  // CREATE TEST RUN DENGAN TEST CASES PILIHAN
+  async function submitCreateTestRun() {
+    if (!selectedCaseKeys.length) {
+      alert("Pilih minimal 1 test case untuk dibuatkan Test Run!");
+      return;
+    }
+
+    const targetCases = (cases.length > 0 ? cases : demoCases).filter(c => selectedCaseKeys.includes(c.case_key));
+
+    if (!supabase) {
+      const mockRun: TestRun = { id: `mock-${Date.now()}`, name: runNameInput, environment: "Android", status: "In Progress", created_at: new Date().toISOString() };
+      setRuns(prev => [mockRun, ...prev]);
+      setShowRunModal(false);
+      return;
+    }
+
     const { data: projData } = await supabase.from("projects").select("id").limit(1).single();
-    
-    const insertPayload: any = { name: runName, environment: "Android", status: "In Progress" };
+    const insertPayload: any = { name: runNameInput, environment: "Android", status: "In Progress" };
     if (projData?.id) insertPayload.project_id = projData.id;
 
-    const { data: newRun, error } = await supabase
-      .from("test_runs")
-      .insert(insertPayload)
-      .select()
-      .single();
-    
+    const { data: newRun, error } = await supabase.from("test_runs").insert(insertPayload).select().single();
     if (error) {
       alert("Gagal membuat Test Run: " + error.message);
       return;
@@ -119,36 +136,40 @@ export default function Home() {
         status: "UNTESTED"
       }));
 
-      const { data: insertedResults, error: resError } = await supabase
-        .from("test_results")
-        .insert(initialResults)
-        .select();
-
-      if (resError) {
-        console.error("Error inserting initial results:", resError);
-      }
-
+      const { data: insertedResults } = await supabase.from("test_results").insert(initialResults).select();
       setRuns(prev => [newRun as TestRun, ...prev]);
-      
-      // Jika database insert return data, pakai itu. Jika tidak, pakai lokal initialResults
+
       if (insertedResults && insertedResults.length > 0) {
         setRunResults(insertedResults as TestResult[]);
       } else {
         setRunResults(initialResults.map((r, i) => ({ ...r, id: `temp-${i}` })) as TestResult[]);
       }
-      
+
       setActiveRun(newRun as TestRun);
+      setShowRunModal(false);
     }
   }
 
-  // MEMBUKA DETAIL RUN
+  // DELETE TEST RUN
+  async function deleteTestRun(runId: string, runName: string) {
+    if (!confirm(`Apakah kamu yakin ingin menghapus "${runName}"?`)) return;
+
+    setRuns(prev => prev.filter(r => r.id !== runId));
+    if (activeRun?.id === runId) setActiveRun(null);
+
+    if (supabase) {
+      const { error } = await supabase.from("test_runs").delete().eq("id", runId);
+      if (error) alert("Gagal menghapus dari Supabase: " + error.message);
+      else loadData();
+    }
+  }
+
+  // OPEN RUN DETAILS
   async function openRunDetails(run: TestRun) {
     setActiveRun(run);
     if (!supabase) return;
-    
-    const { data, error } = await supabase.from("test_results").select("*").eq("run_id", run.id);
-    
-    // Fallback: Jika data dari Supabase kosong, bentuk baris dari cases repository
+
+    const { data } = await supabase.from("test_results").select("*").eq("run_id", run.id);
     if (!data || data.length === 0) {
       const targetCases = cases.length > 0 ? cases : demoCases;
       const fallbackResults = targetCases.map((c, i) => ({
@@ -164,18 +185,16 @@ export default function Home() {
     }
   }
 
-  // FUNGSI UPDATE / TOGGLE STATUS
+  // TOGGLE STATUS EXECUTION
   async function toggleResultStatus(resItem: TestResult, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
     const currentStatus = resItem.status;
     const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
 
-    // Update UI Lokal
     setRunResults(prev => prev.map(r => r.case_key === resItem.case_key ? { ...r, status: newStatus as any } : r));
 
     if (supabase) {
-      // Jika id temporary/fallback, upsert data baru
       if (resItem.id.startsWith("temp-") || resItem.id.startsWith("fb-")) {
-        const { data: upsertData, error } = await supabase.from("test_results").insert({
+        const { data: upsertData } = await supabase.from("test_results").insert({
           run_id: resItem.run_id,
           case_key: resItem.case_key,
           title: resItem.title,
@@ -195,7 +214,7 @@ export default function Home() {
     }
   }
 
-  // SUMMARY PERSENTASE RUN
+  // RENDER PERCENTAGE SUMMARY
   function renderRunStatusSummary(runId: string) {
     const results = activeRun?.id === runId ? runResults : (allResultsMap[runId] || []);
     if (!results.length) return <span className="badge">In Progress</span>;
@@ -212,9 +231,7 @@ export default function Home() {
     const blockedRate = Math.round((blockedCount / total) * 100);
     const naRate = Math.round((naCount / total) * 100);
 
-    if (untestedCount === total) {
-      return <span className="badge">Untested (0%)</span>;
-    }
+    if (untestedCount === total) return <span className="badge">Untested (0%)</span>;
 
     return (
       <div style={{ fontSize: 12, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -280,7 +297,7 @@ export default function Home() {
             <div className="muted">Gods & Glory • GNG</div>
           </div>
           {tab === "Test Cases" && <button className="btn" onClick={() => setShowNew(true)}>+ New Test Case</button>}
-          {tab === "Test Runs" && !activeRun && <button className="btn" onClick={createTestRun}>+ Start New Test Run</button>}
+          {tab === "Test Runs" && !activeRun && <button className="btn" onClick={openCreateRunModal}>+ Start New Test Run</button>}
         </div>
 
         {tab === "Dashboard" && <Dashboard cases={cases} counts={counts} runsCount={runs.length} />}
@@ -315,6 +332,7 @@ export default function Home() {
           </>
         )}
 
+        {/* TAB 3: TEST RUNS LIST (WITH DELETE BUTTON) */}
         {tab === "Test Runs" && !activeRun && (
           <div className="card">
             <h3>Active Test Runs</h3>
@@ -326,7 +344,12 @@ export default function Home() {
                     <td><b>{r.name}</b></td>
                     <td>{r.environment || "Android"}</td>
                     <td>{renderRunStatusSummary(r.id)}</td>
-                    <td><button className="btn secondary" onClick={() => openRunDetails(r)}>Execute / View</button></td>
+                    <td>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button className="btn secondary" onClick={() => openRunDetails(r)}>Execute / View</button>
+                        <button className="btn" style={{ background: "#ef4444", padding: "4px 10px" }} onClick={() => deleteTestRun(r.id, r.name)}>Delete</button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
                 {runs.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: "center" }}>No active test runs. Click "+ Start New Test Run" to begin!</td></tr>}
@@ -335,6 +358,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* TAB 3: EXECUTION DETAIL */}
         {tab === "Test Runs" && activeRun && (
           <div className="card">
             <button className="btn secondary" style={{ marginBottom: 16 }} onClick={() => { setActiveRun(null); loadData(); }}>← Back to All Runs</button>
@@ -355,53 +379,10 @@ export default function Home() {
                       <td>{caseTitle}</td>
                       <td>
                         <div style={{ display: "flex", gap: 6 }}>
-                          <button 
-                            className="btn" 
-                            style={{ 
-                              background: res.status === 'PASS' ? '#22c55e' : '#334155', 
-                              opacity: res.status === 'PASS' || res.status === 'UNTESTED' ? 1 : 0.4,
-                              padding: '4px 10px' 
-                            }} 
-                            onClick={() => toggleResultStatus(res, 'PASS')}
-                          >
-                            PASS
-                          </button>
-
-                          <button 
-                            className="btn" 
-                            style={{ 
-                              background: res.status === 'FAIL' ? '#ef4444' : '#334155', 
-                              opacity: res.status === 'FAIL' || res.status === 'UNTESTED' ? 1 : 0.4,
-                              padding: '4px 10px' 
-                            }} 
-                            onClick={() => toggleResultStatus(res, 'FAIL')}
-                          >
-                            FAIL
-                          </button>
-
-                          <button 
-                            className="btn" 
-                            style={{ 
-                              background: res.status === 'BLOCKED' ? '#eab308' : '#334155', 
-                              opacity: res.status === 'BLOCKED' || res.status === 'UNTESTED' ? 1 : 0.4,
-                              padding: '4px 10px' 
-                            }} 
-                            onClick={() => toggleResultStatus(res, 'BLOCKED')}
-                          >
-                            BLOCKED
-                          </button>
-
-                          <button 
-                            className="btn" 
-                            style={{ 
-                              background: res.status === 'N/A' ? '#64748b' : '#334155', 
-                              opacity: res.status === 'N/A' || res.status === 'UNTESTED' ? 1 : 0.4,
-                              padding: '4px 10px' 
-                            }} 
-                            onClick={() => toggleResultStatus(res, 'N/A')}
-                          >
-                            N/A
-                          </button>
+                          <button className="btn" style={{ background: res.status === 'PASS' ? '#22c55e' : '#334155', opacity: res.status === 'PASS' || res.status === 'UNTESTED' ? 1 : 0.4, padding: '4px 10px' }} onClick={() => toggleResultStatus(res, 'PASS')}>PASS</button>
+                          <button className="btn" style={{ background: res.status === 'FAIL' ? '#ef4444' : '#334155', opacity: res.status === 'FAIL' || res.status === 'UNTESTED' ? 1 : 0.4, padding: '4px 10px' }} onClick={() => toggleResultStatus(res, 'FAIL')}>FAIL</button>
+                          <button className="btn" style={{ background: res.status === 'BLOCKED' ? '#eab308' : '#334155', opacity: res.status === 'BLOCKED' || res.status === 'UNTESTED' ? 1 : 0.4, padding: '4px 10px' }} onClick={() => toggleResultStatus(res, 'BLOCKED')}>BLOCKED</button>
+                          <button className="btn" style={{ background: res.status === 'N/A' ? '#64748b' : '#334155', opacity: res.status === 'N/A' || res.status === 'UNTESTED' ? 1 : 0.4, padding: '4px 10px' }} onClick={() => toggleResultStatus(res, 'N/A')}>N/A</button>
                         </div>
                       </td>
                     </tr>
@@ -425,6 +406,49 @@ export default function Home() {
         )}
       </main>
 
+      {/* MODAL 1: CREATE TEST RUN & SELECT TEST CASES */}
+      {showRunModal && (
+        <div className="modalbg">
+          <div className="modal" style={{ maxWidth: 600 }}>
+            <h2>Create New Test Run</h2>
+            <div className="field full" style={{ marginTop: 16 }}>
+              <label>Run Name</label>
+              <input className="input" value={runNameInput} onChange={e => setRunNameInput(e.target.value)} />
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 20, marginBottom: 8 }}>
+              <label style={{ fontWeight: "bold" }}>Select Test Cases to Include ({selectedCaseKeys.length}):</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn secondary" style={{ padding: "2px 8px", fontSize: 12 }} onClick={() => setSelectedCaseKeys((cases.length > 0 ? cases : demoCases).map(c => c.case_key))}>Select All</button>
+                <button className="btn secondary" style={{ padding: "2px 8px", fontSize: 12 }} onClick={() => setSelectedCaseKeys([])}>Deselect All</button>
+              </div>
+            </div>
+
+            <div style={{ maxHeight: 250, overflowY: "auto", border: "1px solid #334155", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+              {(cases.length > 0 ? cases : demoCases).map(c => (
+                <label key={c.case_key} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14 }}>
+                  <input 
+                    type="checkbox" 
+                    checked={selectedCaseKeys.includes(c.case_key)}
+                    onChange={(e) => {
+                      if (e.target.checked) setSelectedCaseKeys(prev => [...prev, c.case_key]);
+                      else setSelectedCaseKeys(prev => prev.filter(k => k !== c.case_key));
+                    }}
+                  />
+                  <span><b>[{c.case_key}]</b> {c.title} <span className="badge" style={{ marginLeft: 6 }}>{c.test_type}</span></span>
+                </label>
+              ))}
+            </div>
+
+            <div className="actions" style={{ marginTop: 20 }}>
+              <button className="btn secondary" onClick={() => setShowRunModal(false)}>Cancel</button>
+              <button className="btn" onClick={submitCreateTestRun}>Create & Execute</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: NEW TEST CASE */}
       {showNew && (
         <div className="modalbg">
           <div className="modal">
