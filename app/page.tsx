@@ -64,8 +64,8 @@ export default function Home() {
     }
 
     const { data: caseData, error } = await supabase.from("test_cases").select("*").order("case_key");
-    if (error || !caseData?.length) setCases(demoCases);
-    else setCases(caseData as Case[]);
+    const activeCases = (error || !caseData?.length) ? demoCases : (caseData as Case[]);
+    setCases(activeCases);
 
     try {
       const { data: runData } = await supabase.from("test_runs").select("*").order("created_at", { ascending: false });
@@ -89,12 +89,12 @@ export default function Home() {
 
   useEffect(() => { loadData(); }, []);
 
-  // FUNGSI MEMBUAT RUN BARU DENGAN PROJECT_ID AMAN
+  // FUNGSI BUAT RUN BARU (DENGAN GUARANTEE BARIS POPULATED)
   async function createTestRun() {
     if (!supabase) return;
+    const targetCases = cases.length > 0 ? cases : demoCases;
     const runName = `Run v1.${runs.length + 1} - ${new Date().toLocaleDateString()}`;
     
-    // Ambil project_id dari Supabase
     const { data: projData } = await supabase.from("projects").select("id").limit(1).single();
     
     const insertPayload: any = { name: runName, environment: "Android", status: "In Progress" };
@@ -107,49 +107,95 @@ export default function Home() {
       .single();
     
     if (error) {
-      console.error("Create run error:", error);
       alert("Gagal membuat Test Run: " + error.message);
       return;
     }
 
     if (newRun) {
-      const initialResults = cases.map(c => ({
+      const initialResults = targetCases.map(c => ({
         run_id: newRun.id,
         case_key: c.case_key,
         title: c.title,
         status: "UNTESTED"
       }));
 
-      await supabase.from("test_results").insert(initialResults);
+      const { data: insertedResults, error: resError } = await supabase
+        .from("test_results")
+        .insert(initialResults)
+        .select();
+
+      if (resError) {
+        console.error("Error inserting initial results:", resError);
+      }
+
       setRuns(prev => [newRun as TestRun, ...prev]);
-      openRunDetails(newRun as TestRun);
+      
+      // Jika database insert return data, pakai itu. Jika tidak, pakai lokal initialResults
+      if (insertedResults && insertedResults.length > 0) {
+        setRunResults(insertedResults as TestResult[]);
+      } else {
+        setRunResults(initialResults.map((r, i) => ({ ...r, id: `temp-${i}` })) as TestResult[]);
+      }
+      
+      setActiveRun(newRun as TestRun);
     }
   }
 
+  // MEMBUKA DETAIL RUN
   async function openRunDetails(run: TestRun) {
     setActiveRun(run);
     if (!supabase) return;
+    
     const { data, error } = await supabase.from("test_results").select("*").eq("run_id", run.id);
-    if (error) console.error("Error fetching results:", error);
-    if (data) setRunResults(data as TestResult[]);
+    
+    // Fallback: Jika data dari Supabase kosong, bentuk baris dari cases repository
+    if (!data || data.length === 0) {
+      const targetCases = cases.length > 0 ? cases : demoCases;
+      const fallbackResults = targetCases.map((c, i) => ({
+        id: `fb-${run.id}-${i}`,
+        run_id: run.id,
+        case_key: c.case_key,
+        title: c.title,
+        status: "UNTESTED" as const
+      }));
+      setRunResults(fallbackResults);
+    } else {
+      setRunResults(data as TestResult[]);
+    }
   }
 
-  // FUNGSI UPDATE STATUS REALTIME
-  async function toggleResultStatus(id: string, currentStatus: string, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
+  // FUNGSI UPDATE / TOGGLE STATUS
+  async function toggleResultStatus(resItem: TestResult, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
+    const currentStatus = resItem.status;
     const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
 
-    setRunResults(prev => prev.map(r => r.id === id ? { ...r, status: newStatus as any } : r));
+    // Update UI Lokal
+    setRunResults(prev => prev.map(r => r.case_key === resItem.case_key ? { ...r, status: newStatus as any } : r));
 
     if (supabase) {
-      const { error } = await supabase.from("test_results").update({ status: newStatus }).eq("id", id);
-      if (error) {
-        alert("Gagal menyimpan ke Supabase: " + error.message);
-        setRunResults(prev => prev.map(r => r.id === id ? { ...r, status: currentStatus as any } : r));
+      // Jika id temporary/fallback, upsert data baru
+      if (resItem.id.startsWith("temp-") || resItem.id.startsWith("fb-")) {
+        const { data: upsertData, error } = await supabase.from("test_results").insert({
+          run_id: resItem.run_id,
+          case_key: resItem.case_key,
+          title: resItem.title,
+          status: newStatus
+        }).select().single();
+
+        if (upsertData) {
+          setRunResults(prev => prev.map(r => r.case_key === resItem.case_key ? (upsertData as TestResult) : r));
+        }
+      } else {
+        const { error } = await supabase.from("test_results").update({ status: newStatus }).eq("id", resItem.id);
+        if (error) {
+          alert("Gagal menyimpan ke Supabase: " + error.message);
+          setRunResults(prev => prev.map(r => r.case_key === resItem.case_key ? { ...r, status: currentStatus as any } : r));
+        }
       }
     }
   }
 
-  // KALKULATOR SUMMARY PERSENTASE LENGKAP (PASS, FAIL, BLOCKED, N/A, UNTESTED)
+  // SUMMARY PERSENTASE RUN
   function renderRunStatusSummary(runId: string) {
     const results = activeRun?.id === runId ? runResults : (allResultsMap[runId] || []);
     if (!results.length) return <span className="badge">In Progress</span>;
@@ -304,7 +350,7 @@ export default function Home() {
                   const caseTitle = res.title || matchedCase?.title || "Test Case Execution";
 
                   return (
-                    <tr key={res.id}>
+                    <tr key={res.id || index}>
                       <td><b>{caseKey}</b></td>
                       <td>{caseTitle}</td>
                       <td>
@@ -316,7 +362,7 @@ export default function Home() {
                               opacity: res.status === 'PASS' || res.status === 'UNTESTED' ? 1 : 0.4,
                               padding: '4px 10px' 
                             }} 
-                            onClick={() => toggleResultStatus(res.id, res.status, 'PASS')}
+                            onClick={() => toggleResultStatus(res, 'PASS')}
                           >
                             PASS
                           </button>
@@ -328,7 +374,7 @@ export default function Home() {
                               opacity: res.status === 'FAIL' || res.status === 'UNTESTED' ? 1 : 0.4,
                               padding: '4px 10px' 
                             }} 
-                            onClick={() => toggleResultStatus(res.id, res.status, 'FAIL')}
+                            onClick={() => toggleResultStatus(res, 'FAIL')}
                           >
                             FAIL
                           </button>
@@ -340,7 +386,7 @@ export default function Home() {
                               opacity: res.status === 'BLOCKED' || res.status === 'UNTESTED' ? 1 : 0.4,
                               padding: '4px 10px' 
                             }} 
-                            onClick={() => toggleResultStatus(res.id, res.status, 'BLOCKED')}
+                            onClick={() => toggleResultStatus(res, 'BLOCKED')}
                           >
                             BLOCKED
                           </button>
@@ -352,7 +398,7 @@ export default function Home() {
                               opacity: res.status === 'N/A' || res.status === 'UNTESTED' ? 1 : 0.4,
                               padding: '4px 10px' 
                             }} 
-                            onClick={() => toggleResultStatus(res.id, res.status, 'N/A')}
+                            onClick={() => toggleResultStatus(res, 'N/A')}
                           >
                             N/A
                           </button>
