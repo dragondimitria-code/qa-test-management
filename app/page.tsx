@@ -51,7 +51,7 @@ export default function Home() {
   });
 
   const [runs, setRuns] = useState<TestRun[]>([]);
-  const [activeRun, setActiveRun] = useState<TestRun null |>(null);
+  const [activeRun, setActiveRun] = useState<TestRun | null>(null);
   const [runResults, setRunResults] = useState<TestResult[]>([]);
 
   async function loadData() {
@@ -172,4 +172,179 @@ export default function Home() {
           {tab === "Test Runs" && !activeRun && <button className="btn" onClick={createTestRun}>+ Start New Test Run</button>}
         </div>
 
-        {tab === "Dashboard" &&
+        {tab === "Dashboard" && <Dashboard cases={cases} counts={counts} runsCount={runs.length} />}
+
+        {tab === "Test Cases" && (
+          <>
+            <div className="toolbar">
+              <input className="input" placeholder="Search ID, title, module..." value={search} onChange={e => setSearch(e.target.value)} />
+              <select className="select" style={{ width: 150 }} value={type} onChange={e => setType(e.target.value)}>
+                <option>All</option><option>Smoke</option><option>Sanity</option><option>Regression</option><option>LQA</option>
+              </select>
+            </div>
+            <div className="tablewrap">
+              {loading ? <div className="empty">Loading...</div> : (
+                <table className="table">
+                  <thead><tr><th>ID</th><th>Title</th><th>Type</th><th>Module</th><th>Priority</th><th>Tags</th></tr></thead>
+                  <tbody>
+                    {filtered.map(c => (
+                      <tr key={c.id}>
+                        <td><b>{c.case_key}</b></td>
+                        <td>{c.title}<div className="muted" style={{ fontSize: 12, marginTop: 5 }}>{c.expected_result}</div></td>
+                        <td><span className="badge">{c.test_type}</span></td>
+                        <td>{c.module}</td>
+                        <td>{c.priority}</td>
+                        <td>{c.tags?.join(", ")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
+
+        {tab === "Test Runs" && !activeRun && (
+          <div className="card">
+            <h3>Active Test Runs</h3>
+            <table className="table" style={{ marginTop: 16 }}>
+              <thead><tr><th>Run Name</th><th>Environment</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody>
+                {runs.map(r => (
+                  <tr key={r.id}>
+                    <td><b>{r.name}</b></td>
+                    <td>{r.environment}</td>
+                    <td><span className="badge">{r.status}</span></td>
+                    <td><button className="btn secondary" onClick={() => openRunDetails(r)}>Execute / View</button></td>
+                  </tr>
+                ))}
+                {runs.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: "center" }}>No active test runs. Click "+ Start New Test Run" to begin!</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab === "Test Runs" && activeRun && (
+          <div className="card">
+            <button className="btn secondary" style={{ marginBottom: 16 }} onClick={() => setActiveRun(null)}>← Back to All Runs</button>
+            <h2>{activeRun.name}</h2>
+            <p className="muted" style={{ marginBottom: 16 }}>Click status buttons to execute test cases for this run.</p>
+
+            <table className="table">
+              <thead><tr><th>Case ID</th><th>Title</th><th>Execution Status</th></tr></thead>
+              <tbody>
+                {runResults.map((res, index) => {
+                  const matchedCase = cases.find(c => c.id === (res as any).case_id || c.case_key === res.case_key) || cases[index];
+                  const caseKey = res.case_key || matchedCase?.case_key || `TC-00${index + 1}`;
+                  const caseTitle = res.title || matchedCase?.title || "Test Case Execution";
+
+                  return (
+                    <tr key={res.id}>
+                      <td><b>{caseKey}</b></td>
+                      <td>{caseTitle}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button className="btn" style={{ background: res.status === 'PASS' ? '#22c55e' : '#334155', padding: '4px 12px' }} onClick={() => updateResultStatus(res.id, 'PASS')}>PASS</button>
+                          <button className="btn" style={{ background: res.status === 'FAIL' ? '#ef4444' : '#334155', padding: '4px 12px' }} onClick={() => updateResultStatus(res.id, 'FAIL')}>FAIL</button>
+                          <button className="btn" style={{ background: res.status === 'BLOCKED' ? '#eab308' : '#334155', padding: '4px 12px' }} onClick={() => updateResultStatus(res.id, 'BLOCKED')}>BLOCKED</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab === "Defects" && <Placeholder text="V1 reserves bug_id on test results. Connects directly with Jira or external trackers." title="Defects"/>}
+
+        {tab === "Reports" && (
+          <div className="card">
+            <h2>Execution Reports</h2>
+            <div className="grid" style={{ marginTop: 16 }}>
+              <Metric title="Total Runs Executed" value={runs.length} />
+              <Metric title="Repository Coverage" value={`${cases.length} Cases`} />
+            </div>
+          </div>
+        )}
+      </main>
+
+      {showNew && (
+        <div className="modalbg">
+          <div className="modal">
+            <h2>New Test Case</h2>
+            <div className="formgrid">
+              <Field label="Case ID"><input className="input" placeholder="SAN-002" value={newCase.case_key} onChange={e => setNewCase({ ...newCase, case_key: e.target.value })} /></Field>
+              <Field label="Title"><input className="input" placeholder="Verify ..." value={newCase.title} onChange={e => setNewCase({ ...newCase, title: e.target.value })} /></Field>
+              <Field label="Type"><select className="select" value={newCase.test_type} onChange={e => setNewCase({ ...newCase, test_type: e.target.value })}><option>Smoke</option><option>Sanity</option><option>Regression</option><option>LQA</option></select></Field>
+              <Field label="Priority"><select className="select" value={newCase.priority} onChange={e => setNewCase({ ...newCase, priority: e.target.value })}><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select></Field>
+              <Field label="Module"><input className="input" value={newCase.module} onChange={e => setNewCase({ ...newCase, module: e.target.value })} /></Field>
+              <Field label="Tags"><input className="input" placeholder="live-ops, offer" value={newCase.tags} onChange={e => setNewCase({ ...newCase, tags: e.target.value })} /></Field>
+              <Field full label="Precondition"><textarea className="textarea" rows={3} value={newCase.precondition} onChange={e => setNewCase({ ...newCase, precondition: e.target.value })} /></Field>
+              <Field full label="Steps (one per line)"><textarea className="textarea" rows={5} placeholder={"Open the event\nOpen Shop\nVerify offer"} value={newCase.steps} onChange={e => setNewCase({ ...newCase, steps: e.target.value })} /></Field>
+              <Field full label="Expected Result"><textarea className="textarea" rows={4} value={newCase.expected_result} onChange={e => setNewCase({ ...newCase, expected_result: e.target.value })} /></Field>
+            </div>
+            <div className="actions">
+              <button className="btn secondary" onClick={() => setShowNew(false)}>Cancel</button>
+              <button className="btn" onClick={saveCase} disabled={!newCase.case_key || !newCase.title}>Save Test Case</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Field({ label, children, full = false }: { label: string; children: React.ReactNode; full?: boolean }) {
+  return <div className={"field " + (full ? "full" : "")}><label>{label}</label>{children}</div>;
+}
+
+function Placeholder({ title, text }: { title: string; text: string }) {
+  return <div className="card"><h2>{title}</h2><p className="muted">{text}</p></div>;
+}
+
+function Dashboard({ counts, cases, runsCount }: { counts: { total: number; smoke: number; sanity: number }; cases: Case[]; runsCount: number }) {
+  return (
+    <>
+      <div className="grid">
+        <Metric title="Total Test Cases" value={counts.total} />
+        <Metric title="Smoke Suite" value={counts.smoke} />
+        <Metric title="Sanity Suite" value={counts.sanity} />
+        <Metric title="Total Test Runs" value={runsCount} />
+      </div>
+      <div className="section grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 20 }}>
+        <div className="card">
+          <h3>Recommended Smoke Suite</h3>
+          <p className="muted">Critical paths: launch, login, lobby, shop, active event access.</p>
+          <div style={{ fontSize: 24, fontWeight: 800, marginTop: 8 }}>{counts.smoke} cases</div>
+        </div>
+        <div className="card">
+          <h3>Current Sanity Scope</h3>
+          <p className="muted">Feature-specific validation after changes or Live Ops deployment.</p>
+          <div style={{ fontSize: 24, fontWeight: 800, marginTop: 8 }}>{counts.sanity} cases</div>
+        </div>
+      </div>
+      <div className="section card" style={{ marginTop: 20 }}>
+        <h3>Recent Test Cases</h3>
+        <table className="table">
+          <thead><tr><th>ID</th><th>Title</th><th>Type</th><th>Module</th></tr></thead>
+          <tbody>
+            {cases.slice(0, 8).map((c) => (
+              <tr key={c.id}><td>{c.case_key}</td><td>{c.title}</td><td>{c.test_type}</td><td>{c.module}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function Metric({ title, value }: { title: string; value: number | string }) {
+  return (
+    <div className="card">
+      <div className="muted">{title}</div>
+      <div className="metric">{value}</div>
+    </div>
+  );
+}
