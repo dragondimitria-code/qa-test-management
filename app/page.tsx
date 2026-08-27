@@ -1,7 +1,7 @@
  "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getSupabase } from "../lib/supabase";
+import { supabase } from "../lib/supabase";
 
 type Case = {
   id:string; case_key:string; title:string; test_type:string; module:string;
@@ -23,7 +23,6 @@ export default function Home(){
   const [type,setType]=useState("All");
   const [showNew,setShowNew]=useState(false);
   const [newCase,setNewCase]=useState({case_key:"",title:"",test_type:"Sanity",module:"General",priority:"Medium",precondition:"",expected_result:"",steps:"",tags:""});
-  const supabase=getSupabase();
 
   async function loadCases(){
     setLoading(true);
