@@ -241,11 +241,16 @@ export default function Home() {
             <table className="table">
               <thead><tr><th>Case ID</th><th>Title</th><th>Execution Status</th></tr></thead>
               <tbody>
-                {runResults.map(res => (
-                  <tr key={res.id}>
-                    <td><b>{res.case_key}</b></td>
-                    <td>{res.title}</td>
-                    <td>
+                {runResults.map((res, index) => {
+  const matchedCase = cases.find(c => c.id === (res as any).case_id || c.case_key === res.case_key) || cases[index];
+  const caseKey = res.case_key || matchedCase?.case_key || `TC-00${index + 1}`;
+  const caseTitle = res.title || matchedCase?.title || "Test Case Execution";
+
+  return (
+    <tr key={res.id}>
+      <td><b>{caseKey}</b></td>
+      <td>{caseTitle}</td>
+      <td>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button className="btn" style={{ background: res.status === 'PASS' ? '#22c55e' : '#334155', padding: '4px 12px' }} onClick={() => updateResultStatus(res.id, 'PASS')}>PASS</button>
                         <button className="btn" style={{ background: res.status === 'FAIL' ? '#ef4444' : '#334155', padding: '4px 12px' }} onClick={() => updateResultStatus(res.id, 'FAIL')}>FAIL</button>
