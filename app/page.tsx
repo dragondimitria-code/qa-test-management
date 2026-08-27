@@ -28,6 +28,7 @@ type TestRun = {
 type TestResult = {
   id: string;
   run_id: string;
+  case_id?: string;
   case_key: string;
   title: string;
   status: "UNTESTED" | "PASS" | "FAIL" | "BLOCKED" | "N/A";
@@ -50,7 +51,6 @@ export default function Home() {
     case_key: "", title: "", test_type: "Sanity", module: "General", priority: "Medium", precondition: "", expected_result: "", steps: "", tags: ""
   });
 
-  // State Test Runs & Selection Modal
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [activeRun, setActiveRun] = useState<TestRun | null>(null);
   const [runResults, setRunResults] = useState<TestResult[]>([]);
@@ -94,18 +94,16 @@ export default function Home() {
 
   useEffect(() => { loadData(); }, []);
 
-  // OPEN MODAL BUAT RUN BARU
   function openCreateRunModal() {
     const targetCases = cases.length > 0 ? cases : demoCases;
     setRunNameInput(`Run v1.${runs.length + 1} - ${new Date().toLocaleDateString()}`);
-    setSelectedCaseKeys(targetCases.map(c => c.case_key)); // Default: Select All
+    setSelectedCaseKeys(targetCases.map(c => c.case_key));
     setShowRunModal(true);
   }
 
-  // CREATE TEST RUN DENGAN TEST CASES PILIHAN
   async function submitCreateTestRun() {
     if (!selectedCaseKeys.length) {
-      alert("Pilih minimal 1 test case untuk dibuatkan Test Run!");
+      alert("Pilih minimal 1 test case!");
       return;
     }
 
@@ -131,26 +129,28 @@ export default function Home() {
     if (newRun) {
       const initialResults = targetCases.map(c => ({
         run_id: newRun.id,
+        case_id: c.id,
         case_key: c.case_key,
         title: c.title,
         status: "UNTESTED"
       }));
 
-      const { data: insertedResults } = await supabase.from("test_results").insert(initialResults).select();
+      const { data: insertedResults, error: resErr } = await supabase.from("test_results").insert(initialResults).select();
+      if (resErr) console.error("Insert results error:", resErr);
+
       setRuns(prev => [newRun as TestRun, ...prev]);
 
-      if (insertedResults && insertedResults.length > 0) {
-        setRunResults(insertedResults as TestResult[]);
-      } else {
-        setRunResults(initialResults.map((r, i) => ({ ...r, id: `temp-${i}` })) as TestResult[]);
-      }
+      const finalResults = (insertedResults && insertedResults.length > 0) 
+        ? (insertedResults as TestResult[]) 
+        : initialResults.map((r, i) => ({ ...r, id: `temp-${i}` })) as TestResult[];
 
+      setRunResults(finalResults);
+      setAllResultsMap(prev => ({ ...prev, [newRun.id]: finalResults }));
       setActiveRun(newRun as TestRun);
       setShowRunModal(false);
     }
   }
 
-  // DELETE TEST RUN
   async function deleteTestRun(runId: string, runName: string) {
     if (!confirm(`Apakah kamu yakin ingin menghapus "${runName}"?`)) return;
 
@@ -164,7 +164,6 @@ export default function Home() {
     }
   }
 
-  // OPEN RUN DETAILS
   async function openRunDetails(run: TestRun) {
     setActiveRun(run);
     if (!supabase) return;
@@ -175,6 +174,7 @@ export default function Home() {
       const fallbackResults = targetCases.map((c, i) => ({
         id: `fb-${run.id}-${i}`,
         run_id: run.id,
+        case_id: c.id,
         case_key: c.case_key,
         title: c.title,
         status: "UNTESTED" as const
@@ -185,36 +185,45 @@ export default function Home() {
     }
   }
 
-  // TOGGLE STATUS EXECUTION
   async function toggleResultStatus(resItem: TestResult, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
     const currentStatus = resItem.status;
     const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
 
-    setRunResults(prev => prev.map(r => r.case_key === resItem.case_key ? { ...r, status: newStatus as any } : r));
+    // 1. Update lokal state instan
+    const updatedList = runResults.map(r => r.case_key === resItem.case_key ? { ...r, status: newStatus as any } : r);
+    setRunResults(updatedList);
+    if (activeRun) {
+      setAllResultsMap(prev => ({ ...prev, [activeRun.id]: updatedList }));
+    }
 
+    // 2. Persist ke Supabase
     if (supabase) {
       if (resItem.id.startsWith("temp-") || resItem.id.startsWith("fb-")) {
         const { data: upsertData } = await supabase.from("test_results").insert({
           run_id: resItem.run_id,
+          case_id: resItem.case_id,
           case_key: resItem.case_key,
           title: resItem.title,
           status: newStatus
         }).select().single();
 
         if (upsertData) {
-          setRunResults(prev => prev.map(r => r.case_key === resItem.case_key ? (upsertData as TestResult) : r));
+          const syncedList = updatedList.map(r => r.case_key === resItem.case_key ? (upsertData as TestResult) : r);
+          setRunResults(syncedList);
+          if (activeRun) setAllResultsMap(prev => ({ ...prev, [activeRun.id]: syncedList }));
         }
       } else {
         const { error } = await supabase.from("test_results").update({ status: newStatus }).eq("id", resItem.id);
         if (error) {
           alert("Gagal menyimpan ke Supabase: " + error.message);
-          setRunResults(prev => prev.map(r => r.case_key === resItem.case_key ? { ...r, status: currentStatus as any } : r));
+          const reverted = runResults.map(r => r.case_key === resItem.case_key ? { ...r, status: currentStatus as any } : r);
+          setRunResults(reverted);
+          if (activeRun) setAllResultsMap(prev => ({ ...prev, [activeRun.id]: reverted }));
         }
       }
     }
   }
 
-  // RENDER PERCENTAGE SUMMARY
   function renderRunStatusSummary(runId: string) {
     const results = activeRun?.id === runId ? runResults : (allResultsMap[runId] || []);
     if (!results.length) return <span className="badge">In Progress</span>;
@@ -332,7 +341,7 @@ export default function Home() {
           </>
         )}
 
-        {/* TAB 3: TEST RUNS LIST (WITH DELETE BUTTON) */}
+        {/* TAB 3: TEST RUNS LIST */}
         {tab === "Test Runs" && !activeRun && (
           <div className="card">
             <h3>Active Test Runs</h3>
@@ -369,7 +378,7 @@ export default function Home() {
               <thead><tr><th>Case ID</th><th>Title</th><th>Execution Status</th></tr></thead>
               <tbody>
                 {runResults.map((res, index) => {
-                  const matchedCase = cases.find(c => (c as any).id === (res as any).case_id || c.case_key === res.case_key) || cases[index];
+                  const matchedCase = cases.find(c => c.id === res.case_id || c.case_key === res.case_key) || cases[index];
                   const caseKey = res.case_key || matchedCase?.case_key || `TC-00${index + 1}`;
                   const caseTitle = res.title || matchedCase?.title || "Test Case Execution";
 
