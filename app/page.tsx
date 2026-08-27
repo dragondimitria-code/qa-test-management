@@ -53,6 +53,7 @@ export default function Home() {
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [activeRun, setActiveRun] = useState<TestRun | null>(null);
   const [runResults, setRunResults] = useState<TestResult[]>([]);
+  const [allResultsMap, setAllResultsMap] = useState<Record<string, TestResult[]>>({});
 
   async function loadData() {
     setLoading(true);
@@ -69,8 +70,19 @@ export default function Home() {
     try {
       const { data: runData } = await supabase.from("test_runs").select("*").order("created_at", { ascending: false });
       if (runData) setRuns(runData as TestRun[]);
+
+      // Ambil seluruh hasil untuk perhitungan kalkulasi status persentase
+      const { data: resultsData } = await supabase.from("test_results").select("*");
+      if (resultsData) {
+        const map: Record<string, TestResult[]> = {};
+        resultsData.forEach((res: any) => {
+          if (!map[res.run_id]) map[res.run_id] = [];
+          map[res.run_id].push(res as TestResult);
+        });
+        setAllResultsMap(map);
+      }
     } catch (e) {
-      console.log("Test runs table fetch error", e);
+      console.log("Data fetch error", e);
     }
 
     setLoading(false);
@@ -78,13 +90,14 @@ export default function Home() {
 
   useEffect(() => { loadData(); }, []);
 
-  // FUNGSI MEMBUAT RUN BARU DENGAN SINKRONISASI SUPABASE AMAN
+  // FUNGSI MEMBUAT TEST RUN BARU
   async function createTestRun() {
     if (!supabase) return;
     const runName = `Run v1.${runs.length + 1} - ${new Date().toLocaleDateString()}`;
+    
     const { data: newRun, error } = await supabase
       .from("test_runs")
-      .insert({ name: runName, environment: "Android", status: "In Progress" })
+      .insert({ name: runName, environment: "Android" })
       .select()
       .single();
     
@@ -102,11 +115,7 @@ export default function Home() {
         status: "UNTESTED"
       }));
 
-      const { error: resError } = await supabase.from("test_results").insert(initialResults);
-      if (resError) {
-        console.error("Error inserting initial results:", resError);
-      }
-
+      await supabase.from("test_results").insert(initialResults);
       setRuns(prev => [newRun as TestRun, ...prev]);
       openRunDetails(newRun as TestRun);
     }
@@ -120,7 +129,7 @@ export default function Home() {
     if (data) setRunResults(data as TestResult[]);
   }
 
-  // FUNGSI UPDATE STATUS REALTIME
+  // FUNGSI UPDATE STATUS REALTIME & KALKULASI ULANG
   async function toggleResultStatus(id: string, currentStatus: string, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
     const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
 
@@ -133,6 +142,35 @@ export default function Home() {
         setRunResults(prev => prev.map(r => r.id === id ? { ...r, status: currentStatus as any } : r));
       }
     }
+  }
+
+  // KALKULATOR SUMMARY PERSENTASE RUN
+  function renderRunStatusSummary(runId: string) {
+    const results = activeRun?.id === runId ? runResults : (allResultsMap[runId] || []);
+    if (!results.length) return <span className="badge">In Progress</span>;
+
+    const total = results.length;
+    const passCount = results.filter(r => r.status === "PASS").length;
+    const failCount = results.filter(r => r.status === "FAIL").length;
+    const blockedCount = results.filter(r => r.status === "BLOCKED").length;
+
+    const passRate = Math.round((passCount / total) * 100);
+    const failRate = Math.round((failCount / total) * 100);
+
+    if (passCount === total) {
+      return <span className="badge" style={{ background: "#22c55e", color: "#fff" }}>100% Passed</span>;
+    }
+
+    if (passCount === 0 && failCount === 0 && blockedCount === 0) {
+      return <span className="badge">Untested (0%)</span>;
+    }
+
+    return (
+      <div style={{ fontSize: 13 }}>
+        <b style={{ color: "#22c55e" }}>{passRate}% Pass</b>
+        {failCount > 0 && <span style={{ color: "#ef4444", marginLeft: 8 }}>• {failRate}% Fail</span>}
+      </div>
+    );
   }
 
   const filtered = useMemo(() => cases.filter(c =>
@@ -173,7 +211,7 @@ export default function Home() {
         <div className="brand">QA Test Management</div>
         <div className="nav">
           {["Dashboard", "Test Cases", "Test Runs", "Defects", "Reports"].map(x => (
-            <button key={x} className={tab === x ? "active" : ""} onClick={() => { setTab(x); setActiveRun(null); }}>{x}</button>
+            <button key={x} className={tab === x ? "active" : ""} onClick={() => { setTab(x); setActiveRun(null); loadData(); }}>{x}</button>
           ))}
         </div>
         <div style={{ position: "absolute", bottom: 20, left: 16, right: 16, fontSize: 12, color: "#94a3b8" }}>
@@ -227,13 +265,13 @@ export default function Home() {
           <div className="card">
             <h3>Active Test Runs</h3>
             <table className="table" style={{ marginTop: 16 }}>
-              <thead><tr><th>Run Name</th><th>Environment</th><th>Status</th><th>Action</th></tr></thead>
+              <thead><tr><th>Run Name</th><th>Environment</th><th>Progress / Status</th><th>Action</th></tr></thead>
               <tbody>
                 {runs.map(r => (
                   <tr key={r.id}>
                     <td><b>{r.name}</b></td>
                     <td>{r.environment || "Android"}</td>
-                    <td><span className="badge">{r.status || "In Progress"}</span></td>
+                    <td>{renderRunStatusSummary(r.id)}</td>
                     <td><button className="btn secondary" onClick={() => openRunDetails(r)}>Execute / View</button></td>
                   </tr>
                 ))}
