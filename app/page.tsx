@@ -71,7 +71,6 @@ export default function Home() {
       const { data: runData } = await supabase.from("test_runs").select("*").order("created_at", { ascending: false });
       if (runData) setRuns(runData as TestRun[]);
 
-      // Ambil seluruh hasil untuk perhitungan kalkulasi status persentase
       const { data: resultsData } = await supabase.from("test_results").select("*");
       if (resultsData) {
         const map: Record<string, TestResult[]> = {};
@@ -90,14 +89,20 @@ export default function Home() {
 
   useEffect(() => { loadData(); }, []);
 
-  // FUNGSI MEMBUAT TEST RUN BARU
+  // FUNGSI MEMBUAT RUN BARU DENGAN PROJECT_ID AMAN
   async function createTestRun() {
     if (!supabase) return;
     const runName = `Run v1.${runs.length + 1} - ${new Date().toLocaleDateString()}`;
     
+    // Ambil project_id dari Supabase
+    const { data: projData } = await supabase.from("projects").select("id").limit(1).single();
+    
+    const insertPayload: any = { name: runName, environment: "Android", status: "In Progress" };
+    if (projData?.id) insertPayload.project_id = projData.id;
+
     const { data: newRun, error } = await supabase
       .from("test_runs")
-      .insert({ name: runName, environment: "Android" })
+      .insert(insertPayload)
       .select()
       .single();
     
@@ -129,7 +134,7 @@ export default function Home() {
     if (data) setRunResults(data as TestResult[]);
   }
 
-  // FUNGSI UPDATE STATUS REALTIME & KALKULASI ULANG
+  // FUNGSI UPDATE STATUS REALTIME
   async function toggleResultStatus(id: string, currentStatus: string, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
     const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
 
@@ -144,7 +149,7 @@ export default function Home() {
     }
   }
 
-  // KALKULATOR SUMMARY PERSENTASE RUN
+  // KALKULATOR SUMMARY PERSENTASE LENGKAP (PASS, FAIL, BLOCKED, N/A, UNTESTED)
   function renderRunStatusSummary(runId: string) {
     const results = activeRun?.id === runId ? runResults : (allResultsMap[runId] || []);
     if (!results.length) return <span className="badge">In Progress</span>;
@@ -153,22 +158,25 @@ export default function Home() {
     const passCount = results.filter(r => r.status === "PASS").length;
     const failCount = results.filter(r => r.status === "FAIL").length;
     const blockedCount = results.filter(r => r.status === "BLOCKED").length;
+    const naCount = results.filter(r => r.status === "N/A").length;
+    const untestedCount = results.filter(r => r.status === "UNTESTED").length;
 
     const passRate = Math.round((passCount / total) * 100);
     const failRate = Math.round((failCount / total) * 100);
+    const blockedRate = Math.round((blockedCount / total) * 100);
+    const naRate = Math.round((naCount / total) * 100);
 
-    if (passCount === total) {
-      return <span className="badge" style={{ background: "#22c55e", color: "#fff" }}>100% Passed</span>;
-    }
-
-    if (passCount === 0 && failCount === 0 && blockedCount === 0) {
+    if (untestedCount === total) {
       return <span className="badge">Untested (0%)</span>;
     }
 
     return (
-      <div style={{ fontSize: 13 }}>
-        <b style={{ color: "#22c55e" }}>{passRate}% Pass</b>
-        {failCount > 0 && <span style={{ color: "#ef4444", marginLeft: 8 }}>• {failRate}% Fail</span>}
+      <div style={{ fontSize: 12, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        {passCount > 0 && <span style={{ color: "#22c55e", fontWeight: "bold" }}>{passRate}% Pass</span>}
+        {failCount > 0 && <span style={{ color: "#ef4444", fontWeight: "bold" }}>• {failRate}% Fail</span>}
+        {blockedCount > 0 && <span style={{ color: "#eab308", fontWeight: "bold" }}>• {blockedRate}% Blocked</span>}
+        {naCount > 0 && <span style={{ color: "#94a3b8", fontWeight: "bold" }}>• {naRate}% N/A</span>}
+        {untestedCount > 0 && <span style={{ color: "#64748b" }}>({untestedCount} Untested)</span>}
       </div>
     );
   }
