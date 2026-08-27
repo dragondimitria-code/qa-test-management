@@ -35,7 +35,7 @@ type TestResult = {
 
 const demoCases: Case[] = [
   { id: "demo1", case_key: "SMK-001", title: "Game launches successfully", test_type: "Smoke", module: "Core", priority: "Critical", precondition: "Game is installed.", expected_result: "Game launches without crash.", steps: [{ action: "Launch the game" }, { action: "Verify initial screen" }], tags: ["smoke", "core"], updated_at: "" },
-  { id: "demo2", case_key: "SMK-002", title: "Main lobby loads", test_type: "Smoke", module: "Core", priority: "Critical", precondition: "Game is launched.", expected_result: "Main lobby loads.", steps: [{ action: "Wait for lobby" }, { action: "Verify core UI" }], tags: ["smoke", "core"], updated_at: "" },
+  { id: "demo2", case_key: "SMK-002", title: "Main lobby loads", test_type: "Smoke", module: "Core", priority: "Critical", precondition: "Game is launched.", expected_result: "Main lobby loads.", steps: [{ action: "Wait for lobby" }], tags: ["smoke", "core"], updated_at: "" },
   { id: "demo3", case_key: "SAN-001", title: "Alliance Festival offer is displayed", test_type: "Sanity", module: "Alliance Festival", priority: "High", precondition: "Alliance Festival active.", expected_result: "Offer displays properly.", steps: [{ action: "Open Shop" }], tags: ["sanity", "live-ops"], updated_at: "" }
 ];
 
@@ -70,7 +70,7 @@ export default function Home() {
       const { data: runData } = await supabase.from("test_runs").select("*").order("created_at", { ascending: false });
       if (runData) setRuns(runData as TestRun[]);
     } catch (e) {
-      console.log("Test runs table not created yet", e);
+      console.log("Test runs table fetch error", e);
     }
 
     setLoading(false);
@@ -102,23 +102,29 @@ export default function Home() {
     }
   }
 
+  // FUNGSI MEMBUKA DETAIL RUN & SYNC DARI SUPABASE
   async function openRunDetails(run: TestRun) {
     setActiveRun(run);
     if (!supabase) return;
-    const { data } = await supabase.from("test_results").select("*").eq("run_id", run.id);
+    const { data, error } = await supabase.from("test_results").select("*").eq("run_id", run.id);
+    if (error) console.error("Error fetching results:", error);
     if (data) setRunResults(data as TestResult[]);
   }
 
-  // FUNGSI UPDATE & UNDO REALTIME (TERMASUK N/A)
+  // FUNGSI UPDATE & PERSISTENCE SUPABASE
   async function toggleResultStatus(id: string, currentStatus: string, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
     const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
 
+    // Update state lokal secara instan
     setRunResults(prev => prev.map(r => r.id === id ? { ...r, status: newStatus as any } : r));
 
+    // Simpan perubahan ke Supabase
     if (supabase) {
       const { error } = await supabase.from("test_results").update({ status: newStatus }).eq("id", id);
       if (error) {
-        console.error("Gagal menyimpan status ke Supabase:", error);
+        alert("Gagal menyimpan ke Supabase: " + error.message);
+        // Kembalikan ke status semula jika gagal
+        setRunResults(prev => prev.map(r => r.id === id ? { ...r, status: currentStatus as any } : r));
       }
     }
   }
