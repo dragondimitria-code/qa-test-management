@@ -29,6 +29,7 @@ type TestResult = {
   id: string;
   run_id: string;
   case_id?: string;
+  test_case_id?: string;
   case_key: string;
   title: string;
   status: "UNTESTED" | "PASS" | "FAIL" | "BLOCKED" | "N/A";
@@ -101,7 +102,6 @@ export default function Home() {
     setShowRunModal(true);
   }
 
-  // BIKIN TEST RUN BARU HANYA DENGAN CASES YANG DICHENTANG
   async function submitCreateTestRun() {
     if (!selectedCaseKeys.length) {
       alert("Pilih minimal 1 test case!");
@@ -116,6 +116,7 @@ export default function Home() {
         id: `mock-res-${i}`,
         run_id: mockRun.id,
         case_id: c.id,
+        test_case_id: c.id,
         case_key: c.case_key,
         title: c.title,
         status: "UNTESTED" as const
@@ -142,6 +143,7 @@ export default function Home() {
       const initialResults = targetCases.map(c => ({
         run_id: newRun.id,
         case_id: c.id,
+        test_case_id: c.id,
         case_key: c.case_key,
         title: c.title,
         status: "UNTESTED"
@@ -151,6 +153,7 @@ export default function Home() {
       if (resErr) {
         console.error("Insert initial results error:", resErr);
         alert("Gagal menyimpan daftar cases ke Supabase: " + resErr.message);
+        return;
       }
 
       setRuns(prev => [newRun as TestRun, ...prev]);
@@ -179,7 +182,6 @@ export default function Home() {
     }
   }
 
-  // BUKA RUN DETAILS (HANYA AMBIL DATA DARI SUPABASE MILIK RUN INI)
   async function openRunDetails(run: TestRun) {
     setActiveRun(run);
     if (!supabase) return;
@@ -192,29 +194,26 @@ export default function Home() {
     if (data && data.length > 0) {
       setRunResults(data as TestResult[]);
     } else {
-      // Jika data memang kosong/terjadi kegagalan fetch, jangan replace dengan semua repo cases!
       setRunResults([]);
     }
   }
 
-  // UPDATE STATUS AMAN & REALTIME
   async function toggleResultStatus(resItem: TestResult, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
     const currentStatus = resItem.status;
     const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
 
-    // 1. Update lokal state instan
     const updatedList = runResults.map(r => r.id === resItem.id || r.case_key === resItem.case_key ? { ...r, status: newStatus as any } : r);
     setRunResults(updatedList);
     if (activeRun) {
       setAllResultsMap(prev => ({ ...prev, [activeRun.id]: updatedList }));
     }
 
-    // 2. Simpan permanen ke Supabase
     if (supabase) {
       if (resItem.id.startsWith("temp-")) {
         const { data: upsertData } = await supabase.from("test_results").insert({
           run_id: resItem.run_id,
-          case_id: resItem.case_id,
+          case_id: resItem.case_id || resItem.test_case_id,
+          test_case_id: resItem.test_case_id || resItem.case_id,
           case_key: resItem.case_key,
           title: resItem.title,
           status: newStatus
@@ -391,7 +390,7 @@ export default function Home() {
               <thead><tr><th>Case ID</th><th>Title</th><th>Execution Status</th></tr></thead>
               <tbody>
                 {runResults.map((res, index) => {
-                  const matchedCase = cases.find(c => c.id === res.case_id || c.case_key === res.case_key);
+                  const matchedCase = cases.find(c => c.id === res.case_id || c.id === res.test_case_id || c.case_key === res.case_key);
                   const caseKey = res.case_key || matchedCase?.case_key || `TC-00${index + 1}`;
                   const caseTitle = res.title || matchedCase?.title || "Test Case Execution";
 
