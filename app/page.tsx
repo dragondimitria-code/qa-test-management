@@ -30,7 +30,7 @@ type TestResult = {
   run_id: string;
   case_key: string;
   title: string;
-  status: "UNTESTED" | "PASS" | "FAIL" | "BLOCKED";
+  status: "UNTESTED" | "PASS" | "FAIL" | "BLOCKED" | "N/A";
 };
 
 const demoCases: Case[] = [
@@ -109,10 +109,17 @@ export default function Home() {
     if (data) setRunResults(data as TestResult[]);
   }
 
-  async function updateResultStatus(id: string, status: "PASS" | "FAIL" | "BLOCKED") {
-    setRunResults(prev => prev.map(r => r.id === id ? { ...r, status } : r));
+  // FUNGSI UPDATE & UNDO REALTIME (TERMASUK N/A)
+  async function toggleResultStatus(id: string, currentStatus: string, clickedStatus: "PASS" | "FAIL" | "BLOCKED" | "N/A") {
+    const newStatus = currentStatus === clickedStatus ? "UNTESTED" : clickedStatus;
+
+    setRunResults(prev => prev.map(r => r.id === id ? { ...r, status: newStatus as any } : r));
+
     if (supabase) {
-      await supabase.from("test_results").update({ status }).eq("id", id);
+      const { error } = await supabase.from("test_results").update({ status: newStatus }).eq("id", id);
+      if (error) {
+        console.error("Gagal menyimpan status ke Supabase:", error);
+      }
     }
   }
 
@@ -228,7 +235,7 @@ export default function Home() {
           <div className="card">
             <button className="btn secondary" style={{ marginBottom: 16 }} onClick={() => setActiveRun(null)}>← Back to All Runs</button>
             <h2>{activeRun.name}</h2>
-            <p className="muted" style={{ marginBottom: 16 }}>Click status buttons to execute test cases for this run.</p>
+            <p className="muted" style={{ marginBottom: 16 }}>Click a button to change status. Click again to UN-SELECT (undo).</p>
 
             <table className="table">
               <thead><tr><th>Case ID</th><th>Title</th><th>Execution Status</th></tr></thead>
@@ -244,9 +251,53 @@ export default function Home() {
                       <td>{caseTitle}</td>
                       <td>
                         <div style={{ display: "flex", gap: 6 }}>
-                          <button className="btn" style={{ background: res.status === 'PASS' ? '#22c55e' : '#334155', padding: '4px 12px' }} onClick={() => updateResultStatus(res.id, 'PASS')}>PASS</button>
-                          <button className="btn" style={{ background: res.status === 'FAIL' ? '#ef4444' : '#334155', padding: '4px 12px' }} onClick={() => updateResultStatus(res.id, 'FAIL')}>FAIL</button>
-                          <button className="btn" style={{ background: res.status === 'BLOCKED' ? '#eab308' : '#334155', padding: '4px 12px' }} onClick={() => updateResultStatus(res.id, 'BLOCKED')}>BLOCKED</button>
+                          <button 
+                            className="btn" 
+                            style={{ 
+                              background: res.status === 'PASS' ? '#22c55e' : '#334155', 
+                              opacity: res.status === 'PASS' || res.status === 'UNTESTED' ? 1 : 0.4,
+                              padding: '4px 10px' 
+                            }} 
+                            onClick={() => toggleResultStatus(res.id, res.status, 'PASS')}
+                          >
+                            PASS
+                          </button>
+
+                          <button 
+                            className="btn" 
+                            style={{ 
+                              background: res.status === 'FAIL' ? '#ef4444' : '#334155', 
+                              opacity: res.status === 'FAIL' || res.status === 'UNTESTED' ? 1 : 0.4,
+                              padding: '4px 10px' 
+                            }} 
+                            onClick={() => toggleResultStatus(res.id, res.status, 'FAIL')}
+                          >
+                            FAIL
+                          </button>
+
+                          <button 
+                            className="btn" 
+                            style={{ 
+                              background: res.status === 'BLOCKED' ? '#eab308' : '#334155', 
+                              opacity: res.status === 'BLOCKED' || res.status === 'UNTESTED' ? 1 : 0.4,
+                              padding: '4px 10px' 
+                            }} 
+                            onClick={() => toggleResultStatus(res.id, res.status, 'BLOCKED')}
+                          >
+                            BLOCKED
+                          </button>
+
+                          <button 
+                            className="btn" 
+                            style={{ 
+                              background: res.status === 'N/A' ? '#64748b' : '#334155', 
+                              opacity: res.status === 'N/A' || res.status === 'UNTESTED' ? 1 : 0.4,
+                              padding: '4px 10px' 
+                            }} 
+                            onClick={() => toggleResultStatus(res.id, res.status, 'N/A')}
+                          >
+                            N/A
+                          </button>
                         </div>
                       </td>
                     </tr>
